@@ -187,14 +187,44 @@ ENDFORM.                    "get_customer_names
 *&---------------------------------------------------------------------*
 FORM display_pie_chart.
 
+  DATA: lv_max     TYPE p DECIMALS 2,
+        lv_value   TYPE p DECIMALS 2,
+        lv_divisor TYPE p DECIMALS 2 VALUE 1,
+        lv_col1(20) TYPE c,
+        lv_titl(70) TYPE c.
+
   CLEAR: gt_graph, gt_opts.
 
-  " Prepare chart data: customer text + rounded sales value
+  " The chart value field is of type I (max. approx. 2,100,000,000).
+  " Large sales totals must therefore be scaled down before the
+  " assignment, otherwise a conversion overflow (dump) occurs.
+  LOOP AT gt_top INTO gs_top.
+    lv_value = abs( gs_top-netwr ).
+    IF lv_value > lv_max.
+      lv_max = lv_value.
+    ENDIF.
+  ENDLOOP.
+
+  lv_col1 = 'Sales Value'.
+  lv_titl = 'Top 10 Customers by Sales Value'.
+
+  IF lv_max > 2000000000.
+    lv_divisor = 1000000.
+    lv_col1 = 'Sales (Millions)'.
+    lv_titl = 'Top 10 Customers by Sales Value (in Millions)'.
+  ELSEIF lv_max > 2000000.
+    lv_divisor = 1000.
+    lv_col1 = 'Sales (Thousands)'.
+    lv_titl = 'Top 10 Customers by Sales Value (in Thousands)'.
+  ENDIF.
+
+  " Prepare chart data: customer text + scaled sales value
   LOOP AT gt_top INTO gs_top.
     CLEAR gs_graph.
     CONCATENATE gs_top-kunnr gs_top-name1 INTO gs_graph-name
                 SEPARATED BY space.
-    gs_graph-value = gs_top-netwr.      " Rounded to whole units
+    lv_value = gs_top-netwr / lv_divisor.
+    gs_graph-value = lv_value.          " Rounded to whole units
     APPEND gs_graph TO gt_graph.
   ENDLOOP.
 
@@ -206,8 +236,8 @@ FORM display_pie_chart.
 
   CALL FUNCTION 'GRAPH_MATRIX_3D'
     EXPORTING
-      col1 = 'Sales Value'
-      titl = 'Top 10 Customers by Sales Value'
+      col1 = lv_col1
+      titl = lv_titl
     TABLES
       data = gt_graph
       opts = gt_opts
