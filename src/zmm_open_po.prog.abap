@@ -134,6 +134,26 @@ TYPES: BEGIN OF ty_t001w,
 
 
 *---------------------------------------------------------------------*
+* HISTOGRAM TYPES
+*---------------------------------------------------------------------*
+
+TYPES: BEGIN OF ty_histogram,
+
+         bucket   TYPE char40,
+         po_count TYPE i,
+
+       END OF ty_histogram.
+
+
+TYPES: BEGIN OF ty_graph,
+
+         text(40) TYPE c,
+         value    TYPE i,
+
+       END OF ty_graph.
+
+
+*---------------------------------------------------------------------*
 * INTERNAL TABLES
 *---------------------------------------------------------------------*
 
@@ -160,6 +180,15 @@ DATA:
 DATA:
   gt_t001w TYPE STANDARD TABLE OF ty_t001w,
   gs_t001w TYPE ty_t001w.
+
+
+*---------------------------------------------------------------------*
+* HISTOGRAM DATA
+*---------------------------------------------------------------------*
+
+DATA:
+  gt_histogram TYPE STANDARD TABLE OF ty_histogram,
+  gs_histogram TYPE ty_histogram.
 
 
 *---------------------------------------------------------------------*
@@ -275,6 +304,14 @@ PARAMETERS:
 SELECTION-SCREEN END OF BLOCK b4.
 
 
+SELECTION-SCREEN BEGIN OF BLOCK b5 WITH FRAME TITLE text-005.
+
+PARAMETERS:
+  p_chart AS CHECKBOX DEFAULT space.
+
+SELECTION-SCREEN END OF BLOCK b5.
+
+
 *---------------------------------------------------------------------*
 * START OF SELECTION
 *---------------------------------------------------------------------*
@@ -298,6 +335,11 @@ START-OF-SELECTION.
   PERFORM build_sort.
 
   PERFORM display_alv.
+
+  IF p_chart = 'X'.
+    PERFORM prepare_histogram_data.
+    PERFORM display_histogram.
+  ENDIF.
 
 
 *---------------------------------------------------------------------*
@@ -1658,5 +1700,133 @@ FORM user_command USING
       ENDIF.
 
   ENDCASE.
+
+ENDFORM.
+
+
+*---------------------------------------------------------------------*
+* PREPARE HISTOGRAM DATA
+*---------------------------------------------------------------------*
+
+FORM prepare_histogram_data.
+
+  DATA:
+    ls_bucket TYPE ty_histogram,
+    lv_index  TYPE i.
+
+  REFRESH gt_histogram.
+
+*-------------------------------------------------------------------*
+* Initialize all six buckets
+*-------------------------------------------------------------------*
+
+  CLEAR ls_bucket.
+
+  ls_bucket-bucket   = 'Not Overdue'.
+  ls_bucket-po_count = 0.
+  APPEND ls_bucket TO gt_histogram.
+
+  ls_bucket-bucket   = '1-7 Days'.
+  ls_bucket-po_count = 0.
+  APPEND ls_bucket TO gt_histogram.
+
+  ls_bucket-bucket   = '8-30 Days'.
+  ls_bucket-po_count = 0.
+  APPEND ls_bucket TO gt_histogram.
+
+  ls_bucket-bucket   = '31-60 Days'.
+  ls_bucket-po_count = 0.
+  APPEND ls_bucket TO gt_histogram.
+
+  ls_bucket-bucket   = '61-90 Days'.
+  ls_bucket-po_count = 0.
+  APPEND ls_bucket TO gt_histogram.
+
+  ls_bucket-bucket   = '91+ Days'.
+  ls_bucket-po_count = 0.
+  APPEND ls_bucket TO gt_histogram.
+
+
+*-------------------------------------------------------------------*
+* Distribute PO items into buckets
+*-------------------------------------------------------------------*
+
+  LOOP AT gt_output INTO gs_output.
+
+    IF gs_output-overdue_days <= 0.
+      lv_index = 1.
+    ELSEIF gs_output-overdue_days <= 7.
+      lv_index = 2.
+    ELSEIF gs_output-overdue_days <= 30.
+      lv_index = 3.
+    ELSEIF gs_output-overdue_days <= 60.
+      lv_index = 4.
+    ELSEIF gs_output-overdue_days <= 90.
+      lv_index = 5.
+    ELSE.
+      lv_index = 6.
+    ENDIF.
+
+    READ TABLE gt_histogram INDEX lv_index INTO ls_bucket.
+    IF sy-subrc = 0.
+      ls_bucket-po_count = ls_bucket-po_count + 1.
+      MODIFY gt_histogram FROM ls_bucket INDEX lv_index.
+    ENDIF.
+
+  ENDLOOP.
+
+ENDFORM.
+
+
+*---------------------------------------------------------------------*
+* DISPLAY HISTOGRAM
+*---------------------------------------------------------------------*
+
+FORM display_histogram.
+
+  DATA:
+    lt_graph TYPE STANDARD TABLE OF ty_graph,
+    ls_graph TYPE ty_graph.
+
+  IF p_chart <> 'X'.
+    RETURN.
+  ENDIF.
+
+  IF gt_histogram[] IS INITIAL.
+    MESSAGE 'No histogram data available' TYPE 'I'.
+    RETURN.
+  ENDIF.
+
+
+*-------------------------------------------------------------------*
+* Convert histogram table to graph format
+*-------------------------------------------------------------------*
+
+  LOOP AT gt_histogram INTO gs_histogram.
+
+    ls_graph-text  = gs_histogram-bucket.
+    ls_graph-value = gs_histogram-po_count.
+    APPEND ls_graph TO lt_graph.
+
+  ENDLOOP.
+
+
+*-------------------------------------------------------------------*
+* Show 2D business graphic
+*-------------------------------------------------------------------*
+
+  CALL FUNCTION 'GRAPH_2D'
+    EXPORTING
+      titl = 'PO Delivery Delay Histogram'
+      valt = 'Number of PO Items'
+    TABLES
+      data = lt_graph
+    EXCEPTIONS
+      gui_refuse_graphic = 1
+      OTHERS             = 2.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Error displaying histogram' TYPE 'I'.
+  ENDIF.
 
 ENDFORM.
