@@ -167,6 +167,29 @@ DATA:
 
 
 *---------------------------------------------------------------------*
+* VENDOR OVERDUE AGGREGATION (HISTOGRAM)
+*---------------------------------------------------------------------*
+
+TYPES: BEGIN OF ty_vendor,
+         lifnr        TYPE ekko-lifnr,
+         name1        TYPE lfa1-name1,
+         total_days   TYPE i,
+         max_days     TYPE i,
+         items        TYPE i,
+         balance_qty  TYPE ekpo-menge,
+         oldest_eindt TYPE eket-eindt,
+         status       TYPE char35,
+       END OF ty_vendor.
+
+DATA:
+  gt_vendor TYPE STANDARD TABLE OF ty_vendor,
+  gs_vendor TYPE ty_vendor.
+
+DATA:
+  gv_html TYPE string.
+
+
+*---------------------------------------------------------------------*
 * ALV DATA
 *---------------------------------------------------------------------*
 
@@ -264,6 +287,15 @@ PARAMETERS:
 SELECTION-SCREEN END OF BLOCK b4.
 
 
+SELECTION-SCREEN BEGIN OF BLOCK b5 WITH FRAME TITLE text-005.
+
+PARAMETERS:
+  p_chart AS CHECKBOX DEFAULT 'X',
+  p_grid  AS CHECKBOX DEFAULT 'X'.
+
+SELECTION-SCREEN END OF BLOCK b5.
+
+
 *---------------------------------------------------------------------*
 * START
 *---------------------------------------------------------------------*
@@ -278,10 +310,17 @@ START-OF-SELECTION.
   ENDIF.
 
   PERFORM calculate_summary.
-  PERFORM build_fieldcatalog.
-  PERFORM build_sort.
-  PERFORM build_events.
-  PERFORM display_alv.
+
+  IF p_chart = 'X'.
+    PERFORM show_vendor_dashboard.
+  ENDIF.
+
+  IF p_grid = 'X'.
+    PERFORM build_fieldcatalog.
+    PERFORM build_sort.
+    PERFORM build_events.
+    PERFORM display_alv.
+  ENDIF.
 
 
 *---------------------------------------------------------------------*
@@ -1305,5 +1344,618 @@ FORM user_command
     ENDIF.
 
   ENDIF.
+
+ENDFORM.
+
+
+*---------------------------------------------------------------------*
+* SHOW VENDOR DASHBOARD (TOP 10 OVERDUE VENDORS)
+*---------------------------------------------------------------------*
+
+FORM show_vendor_dashboard.
+
+  PERFORM collect_vendor_overdue.
+
+  IF gt_vendor[] IS INITIAL.
+
+    MESSAGE 'No open overdue PO items found for the chart' TYPE 'S'.
+    RETURN.
+
+  ENDIF.
+
+  PERFORM build_dashboard_html.
+
+  CALL METHOD cl_abap_browser=>show_html
+    EXPORTING
+      title       = 'Open PO Dashboard - Top 10 Overdue Vendors'
+      html_string = gv_html
+      size        = cl_abap_browser=>large
+      modal       = 'X'.
+
+ENDFORM.
+
+
+*---------------------------------------------------------------------*
+* COLLECT / AGGREGATE OVERDUE DAYS PER VENDOR
+*---------------------------------------------------------------------*
+
+FORM collect_vendor_overdue.
+
+  DATA:
+    ls_out   TYPE ty_output,
+    lv_index TYPE sy-tabix,
+    lv_lines TYPE i.
+
+  CLEAR gt_vendor[].
+
+
+  LOOP AT gt_output INTO ls_out.
+
+*---------------------------------------------------------------------*
+* ONLY OPEN OVERDUE ITEMS
+*---------------------------------------------------------------------*
+
+    IF ls_out-balance_qty <= 0.
+      CONTINUE.
+    ENDIF.
+
+    IF ls_out-eindt IS INITIAL
+       OR ls_out-eindt >= sy-datum.
+      CONTINUE.
+    ENDIF.
+
+    IF ls_out-overdue_days <= 0.
+      CONTINUE.
+    ENDIF.
+
+
+*---------------------------------------------------------------------*
+* AGGREGATE BY VENDOR
+*---------------------------------------------------------------------*
+
+    CLEAR gs_vendor.
+
+    READ TABLE gt_vendor INTO gs_vendor
+      WITH KEY lifnr = ls_out-lifnr.
+
+    IF sy-subrc = 0.
+
+      lv_index = sy-tabix.
+
+      gs_vendor-total_days  = gs_vendor-total_days + ls_out-overdue_days.
+      gs_vendor-items       = gs_vendor-items + 1.
+      gs_vendor-balance_qty = gs_vendor-balance_qty + ls_out-balance_qty.
+
+      IF ls_out-overdue_days > gs_vendor-max_days.
+
+        gs_vendor-max_days = ls_out-overdue_days.
+        gs_vendor-status   = ls_out-status.
+
+      ENDIF.
+
+      IF ls_out-eindt < gs_vendor-oldest_eindt.
+        gs_vendor-oldest_eindt = ls_out-eindt.
+      ENDIF.
+
+      MODIFY gt_vendor FROM gs_vendor INDEX lv_index.
+
+    ELSE.
+
+      CLEAR gs_vendor.
+
+      gs_vendor-lifnr        = ls_out-lifnr.
+      gs_vendor-name1        = ls_out-name1.
+      gs_vendor-total_days   = ls_out-overdue_days.
+      gs_vendor-max_days     = ls_out-overdue_days.
+      gs_vendor-items        = 1.
+      gs_vendor-balance_qty  = ls_out-balance_qty.
+      gs_vendor-oldest_eindt = ls_out-eindt.
+      gs_vendor-status       = ls_out-status.
+
+      IF gs_vendor-name1 IS INITIAL.
+        gs_vendor-name1 = gs_vendor-lifnr.
+      ENDIF.
+
+      APPEND gs_vendor TO gt_vendor.
+
+    ENDIF.
+
+  ENDLOOP.
+
+
+*---------------------------------------------------------------------*
+* SORT DESCENDING AND KEEP TOP 10
+*---------------------------------------------------------------------*
+
+  SORT gt_vendor BY total_days DESCENDING max_days DESCENDING name1 ASCENDING.
+
+  DESCRIBE TABLE gt_vendor LINES lv_lines.
+
+  IF lv_lines > 10.
+
+    lv_index = 11.
+
+    DELETE gt_vendor FROM lv_index TO lv_lines.
+
+  ENDIF.
+
+ENDFORM.
+
+
+*---------------------------------------------------------------------*
+* BUILD DASHBOARD HTML
+*---------------------------------------------------------------------*
+
+FORM build_dashboard_html.
+
+  DATA:
+    lv_max      TYPE i,
+    lv_sum      TYPE i,
+    lv_avg      TYPE i,
+    lv_rank     TYPE i,
+    lv_pct      TYPE i,
+    lv_tick     TYPE i,
+    lv_str      TYPE string,
+    lv_str2     TYPE string,
+    lv_name     TYPE string,
+    lv_tip      TYPE string,
+    lv_fill     TYPE string,
+    lv_glow     TYPE string,
+    lv_date     TYPE string,
+    lv_today    TYPE string,
+    lv_qty      TYPE string,
+    lv_worst    TYPE string,
+    lv_lines    TYPE i,
+    lv_qty_char TYPE char20.
+
+  CLEAR gv_html.
+
+
+*---------------------------------------------------------------------*
+* HEADER FIGURES
+*---------------------------------------------------------------------*
+
+  CLEAR: lv_max, lv_sum.
+
+  LOOP AT gt_vendor INTO gs_vendor.
+
+    lv_sum = lv_sum + gs_vendor-total_days.
+
+    IF gs_vendor-total_days > lv_max.
+
+      lv_max = gs_vendor-total_days.
+
+      PERFORM esc_html USING gs_vendor-name1 CHANGING lv_worst.
+
+    ENDIF.
+
+  ENDLOOP.
+
+  IF lv_max <= 0.
+    lv_max = 1.
+  ENDIF.
+
+  DESCRIBE TABLE gt_vendor LINES lv_lines.
+
+  IF lv_lines > 0.
+    lv_avg = lv_sum / lv_lines.
+  ENDIF.
+
+  PERFORM date_to_str USING sy-datum CHANGING lv_today.
+
+
+*---------------------------------------------------------------------*
+* DOCUMENT HEAD AND STYLES
+*---------------------------------------------------------------------*
+
+  PERFORM add_html USING '<html><head>'.
+  PERFORM add_html USING '<meta http-equiv="X-UA-Compatible" content="IE=edge">'.
+  PERFORM add_html USING '<title>Open PO Dashboard</title>'.
+  PERFORM add_html USING '<style type="text/css">'.
+
+  PERFORM add_html USING 'body{margin:0;background:#0d1524;color:#e7eefb;'.
+  PERFORM add_html USING 'font-family:Segoe UI,Tahoma,Arial,sans-serif;font-size:13px;}'.
+  PERFORM add_html USING '.wrap{padding:18px 22px 26px 22px;}'.
+  PERFORM add_html USING '.hdr{border-bottom:1px solid #1e2b45;padding-bottom:12px;}'.
+  PERFORM add_html USING '.h1{font-size:21px;font-weight:700;color:#ffffff;}'.
+  PERFORM add_html USING '.sub{font-size:11px;color:#8598b8;margin-top:5px;}'.
+  PERFORM add_html USING '.kpi{width:100%;border-collapse:separate;border-spacing:9px 0;'.
+  PERFORM add_html USING 'margin:16px 0 16px -9px;}'.
+  PERFORM add_html USING '.card{background:#152138;border:1px solid #223a5c;'.
+  PERFORM add_html USING 'border-radius:10px;padding:11px 14px;}'.
+  PERFORM add_html USING '.klab{font-size:10px;color:#8598b8;letter-spacing:.08em;}'.
+  PERFORM add_html USING '.kval{font-size:19px;font-weight:700;color:#ffffff;margin-top:5px;}'.
+  PERFORM add_html USING '.kfoot{font-size:10px;color:#6f83a3;margin-top:3px;}'.
+  PERFORM add_html USING '.panel{background:#101b2e;border:1px solid #223a5c;'.
+  PERFORM add_html USING 'border-radius:12px;padding:16px 20px 20px 20px;}'.
+  PERFORM add_html USING '.ptit{font-size:15px;font-weight:600;color:#ffffff;}'.
+  PERFORM add_html USING '.pnote{font-size:11px;color:#8598b8;margin:4px 0 16px 0;}'.
+  PERFORM add_html USING '.chart{width:100%;border-collapse:collapse;}'.
+  PERFORM add_html USING '.chart td{padding:6px 0;vertical-align:middle;}'.
+  PERFORM add_html USING '.row:hover{background:#16233c;}'.
+  PERFORM add_html USING '.rk{width:36px;}'.
+  PERFORM add_html USING '.badge{display:inline-block;width:24px;height:24px;'.
+  PERFORM add_html USING 'line-height:24px;text-align:center;border-radius:7px;'.
+  PERFORM add_html USING 'background:#22314f;color:#d3e2ff;font-size:11px;font-weight:700;}'.
+  PERFORM add_html USING '.top3{background:#3a1d2c;color:#ffb3c4;}'.
+  PERFORM add_html USING '.vend{width:230px;padding-right:14px;color:#e2ebfa;font-size:12px;}'.
+  PERFORM add_html USING '.vsub{font-size:10px;color:#7e92b2;margin-top:2px;}'.
+  PERFORM add_html USING '.track{background:#18243c;border-radius:7px;height:22px;}'.
+  PERFORM add_html USING '.fill{height:22px;border-radius:7px;}'.
+  PERFORM add_html USING '.val{width:118px;text-align:right;padding-left:14px;'.
+  PERFORM add_html USING 'font-size:14px;font-weight:700;color:#ffffff;}'.
+  PERFORM add_html USING '.unit{font-size:10px;font-weight:400;color:#8598b8;}'.
+  PERFORM add_html USING '.axis{width:100%;border-collapse:collapse;}'.
+  PERFORM add_html USING '.axis td{font-size:10px;color:#6f83a3;padding-top:6px;'.
+  PERFORM add_html USING 'border-top:1px solid #1e2b45;}'.
+  PERFORM add_html USING '.axr{text-align:right;}'.
+  PERFORM add_html USING '.foot{font-size:10px;color:#6f83a3;margin-top:14px;}'.
+
+  PERFORM add_html USING '</style></head><body><div class="wrap">'.
+
+
+*---------------------------------------------------------------------*
+* TITLE
+*---------------------------------------------------------------------*
+
+  PERFORM add_html USING '<div class="hdr">'.
+  PERFORM add_html USING '<div class="h1">Open PO Overdue Dashboard</div>'.
+
+  CONCATENATE
+    '<div class="sub">Top 10 vendors by total overdue days &middot;'
+    ' open items only (balance qty &gt; 0, delivery date &lt; '
+    lv_today
+    ')</div></div>'
+    INTO lv_str.
+
+  PERFORM add_html USING lv_str.
+
+
+*---------------------------------------------------------------------*
+* KPI CARDS
+*---------------------------------------------------------------------*
+
+  PERFORM add_html USING '<table class="kpi"><tr>'.
+
+  PERFORM int_to_str USING lv_sum CHANGING lv_str2.
+
+  PERFORM add_kpi_card USING 'TOTAL OVERDUE DAYS (TOP 10)'
+                             lv_str2
+                             'Sum of overdue days per vendor'.
+
+  PERFORM int_to_str USING lv_max CHANGING lv_str2.
+
+  PERFORM add_kpi_card USING 'WORST VENDOR'
+                             lv_worst
+                             lv_str2.
+
+  PERFORM int_to_str USING lv_avg CHANGING lv_str2.
+
+  PERFORM add_kpi_card USING 'AVERAGE PER VENDOR'
+                             lv_str2
+                             'Overdue days average of shown vendors'.
+
+  PERFORM int_to_str USING gv_overdue CHANGING lv_str2.
+
+  PERFORM add_kpi_card USING 'OVERDUE PO ITEMS'
+                             lv_str2
+                             'Open items past delivery date'.
+
+  PERFORM add_html USING '</tr></table>'.
+
+
+*---------------------------------------------------------------------*
+* CHART PANEL
+*---------------------------------------------------------------------*
+
+  PERFORM add_html USING '<div class="panel">'.
+  PERFORM add_html USING '<div class="ptit">Top 10 Vendors by Total Overdue Days</div>'.
+  PERFORM add_html USING '<div class="pnote">Hover a bar to see vendor details.'.
+  PERFORM add_html USING ' Ranked descending &middot; X-axis = total overdue days,'.
+  PERFORM add_html USING ' Y-axis = vendor name</div>'.
+
+  PERFORM add_html USING '<table class="chart">'.
+
+
+  CLEAR lv_rank.
+
+  LOOP AT gt_vendor INTO gs_vendor.
+
+    lv_rank = lv_rank + 1.
+
+    PERFORM esc_html USING gs_vendor-name1 CHANGING lv_name.
+    PERFORM date_to_str USING gs_vendor-oldest_eindt CHANGING lv_date.
+
+    CLEAR lv_qty_char.
+
+    WRITE gs_vendor-balance_qty TO lv_qty_char.
+    CONDENSE lv_qty_char.
+    lv_qty = lv_qty_char.
+
+
+*---------------------------------------------------------------------*
+* BAR LENGTH
+*---------------------------------------------------------------------*
+
+    lv_pct = gs_vendor-total_days * 100 / lv_max.
+
+    IF lv_pct < 3.
+      lv_pct = 3.
+    ENDIF.
+
+    IF lv_pct > 100.
+      lv_pct = 100.
+    ENDIF.
+
+
+*---------------------------------------------------------------------*
+* COLOUR BY RANK TIER
+*---------------------------------------------------------------------*
+
+    IF lv_rank <= 3.
+      lv_fill = '#ff4d6d'.
+      lv_glow = '#ff9166'.
+    ELSEIF lv_rank <= 6.
+      lv_fill = '#ffa03c'.
+      lv_glow = '#ffd166'.
+    ELSE.
+      lv_fill = '#3f8cff'.
+      lv_glow = '#5ad1ff'.
+    ENDIF.
+
+
+*---------------------------------------------------------------------*
+* TOOLTIP
+*---------------------------------------------------------------------*
+
+    PERFORM int_to_str USING gs_vendor-total_days CHANGING lv_str2.
+
+    CONCATENATE
+      'Vendor' gs_vendor-lifnr '-' lv_name
+      '| Total overdue days:' lv_str2
+      INTO lv_tip SEPARATED BY space.
+
+    PERFORM int_to_str USING gs_vendor-max_days CHANGING lv_str2.
+
+    CONCATENATE
+      lv_tip '| Worst item:' lv_str2 'days'
+      INTO lv_tip SEPARATED BY space.
+
+    PERFORM int_to_str USING gs_vendor-items CHANGING lv_str2.
+
+    CONCATENATE
+      lv_tip '| Overdue items:' lv_str2
+      '| Open qty:' lv_qty
+      '| Oldest delivery date:' lv_date
+      '| Status:' gs_vendor-status
+      INTO lv_tip SEPARATED BY space.
+
+
+*---------------------------------------------------------------------*
+* ROW
+*---------------------------------------------------------------------*
+
+    CONCATENATE '<tr class="row" title="' lv_tip '">' INTO lv_str.
+    PERFORM add_html USING lv_str.
+
+    PERFORM int_to_str USING lv_rank CHANGING lv_str2.
+
+    IF lv_rank <= 3.
+
+      CONCATENATE
+        '<td class="rk"><span class="badge top3">'
+        lv_str2 '</span></td>'
+        INTO lv_str.
+
+    ELSE.
+
+      CONCATENATE
+        '<td class="rk"><span class="badge">'
+        lv_str2 '</span></td>'
+        INTO lv_str.
+
+    ENDIF.
+
+    PERFORM add_html USING lv_str.
+
+
+    PERFORM int_to_str USING gs_vendor-items CHANGING lv_str2.
+
+    CONCATENATE
+      '<td class="vend">' lv_name
+      '<div class="vsub">Vendor ' gs_vendor-lifnr
+      ' &middot; ' lv_str2 ' items &middot; oldest ' lv_date
+      '</div></td>'
+      INTO lv_str.
+
+    PERFORM add_html USING lv_str.
+
+
+    PERFORM int_to_str USING lv_pct CHANGING lv_str2.
+
+    CONCATENATE
+      '<td><div class="track"><div class="fill" style="width:'
+      lv_str2 '%;background-color:' lv_fill
+      ';background-image:linear-gradient(90deg,' lv_glow ',' lv_fill
+      ');"></div></div></td>'
+      INTO lv_str.
+
+    PERFORM add_html USING lv_str.
+
+
+    PERFORM int_to_str USING gs_vendor-total_days CHANGING lv_str2.
+
+    CONCATENATE
+      '<td class="val">' lv_str2
+      '<span class="unit"> days</span></td></tr>'
+      INTO lv_str.
+
+    PERFORM add_html USING lv_str.
+
+  ENDLOOP.
+
+
+*---------------------------------------------------------------------*
+* AXIS
+*---------------------------------------------------------------------*
+
+  PERFORM add_html USING '<tr><td class="rk"></td><td class="vend"></td>'.
+  PERFORM add_html USING '<td><table class="axis"><tr>'.
+
+  CLEAR lv_tick.
+  PERFORM int_to_str USING lv_tick CHANGING lv_str2.
+
+  CONCATENATE '<td>' lv_str2 '</td>' INTO lv_str.
+  PERFORM add_html USING lv_str.
+
+  lv_tick = lv_max / 4.
+  PERFORM int_to_str USING lv_tick CHANGING lv_str2.
+
+  CONCATENATE '<td>' lv_str2 '</td>' INTO lv_str.
+  PERFORM add_html USING lv_str.
+
+  lv_tick = lv_max / 2.
+  PERFORM int_to_str USING lv_tick CHANGING lv_str2.
+
+  CONCATENATE '<td>' lv_str2 '</td>' INTO lv_str.
+  PERFORM add_html USING lv_str.
+
+  lv_tick = lv_max * 3 / 4.
+  PERFORM int_to_str USING lv_tick CHANGING lv_str2.
+
+  CONCATENATE '<td>' lv_str2 '</td>' INTO lv_str.
+  PERFORM add_html USING lv_str.
+
+  PERFORM int_to_str USING lv_max CHANGING lv_str2.
+
+  CONCATENATE '<td class="axr">' lv_str2 '</td>' INTO lv_str.
+  PERFORM add_html USING lv_str.
+
+  PERFORM add_html USING '</tr></table></td><td class="val"></td></tr>'.
+
+  PERFORM add_html USING '</table>'.
+
+
+*---------------------------------------------------------------------*
+* FOOTER
+*---------------------------------------------------------------------*
+
+  CONCATENATE
+    '<div class="foot">Report ZMM_PUR_ORDER_REPORT &middot; generated '
+    lv_today
+    ' &middot; red = ranks 1-3, amber = 4-6, blue = 7-10</div>'
+    INTO lv_str.
+
+  PERFORM add_html USING lv_str.
+
+  PERFORM add_html USING '</div></div></body></html>'.
+
+ENDFORM.
+
+
+*---------------------------------------------------------------------*
+* ADD KPI CARD
+*---------------------------------------------------------------------*
+
+FORM add_kpi_card
+  USING
+    p_label TYPE clike
+    p_value TYPE clike
+    p_note  TYPE clike.
+
+  DATA:
+    lv_line TYPE string.
+
+  CONCATENATE
+    '<td class="card" width="25%"><div class="klab">' p_label
+    '</div><div class="kval">' p_value
+    '</div><div class="kfoot">' p_note
+    '</div></td>'
+    INTO lv_line.
+
+  PERFORM add_html USING lv_line.
+
+ENDFORM.
+
+
+*---------------------------------------------------------------------*
+* APPEND HTML LINE
+*---------------------------------------------------------------------*
+
+FORM add_html
+  USING p_line TYPE clike.
+
+  CONCATENATE gv_html p_line cl_abap_char_utilities=>newline
+    INTO gv_html.
+
+ENDFORM.
+
+
+*---------------------------------------------------------------------*
+* ESCAPE HTML SPECIAL CHARACTERS
+*---------------------------------------------------------------------*
+
+FORM esc_html
+  USING    p_in  TYPE clike
+  CHANGING p_out TYPE string.
+
+  DATA:
+    lv_text TYPE string.
+
+  lv_text = p_in.
+
+  REPLACE ALL OCCURRENCES OF '&' IN lv_text WITH '&amp;'.
+  REPLACE ALL OCCURRENCES OF '<' IN lv_text WITH '&lt;'.
+  REPLACE ALL OCCURRENCES OF '>' IN lv_text WITH '&gt;'.
+  REPLACE ALL OCCURRENCES OF '"' IN lv_text WITH '&quot;'.
+
+  CONDENSE lv_text.
+
+  p_out = lv_text.
+
+ENDFORM.
+
+
+*---------------------------------------------------------------------*
+* INTEGER TO STRING
+*---------------------------------------------------------------------*
+
+FORM int_to_str
+  USING    p_int TYPE i
+  CHANGING p_str TYPE string.
+
+  DATA:
+    lv_char TYPE char20.
+
+  lv_char = p_int.
+
+  CONDENSE lv_char.
+
+  p_str = lv_char.
+
+ENDFORM.
+
+
+*---------------------------------------------------------------------*
+* DATE TO STRING
+*---------------------------------------------------------------------*
+
+FORM date_to_str
+  USING    p_date TYPE d
+  CHANGING p_str  TYPE string.
+
+  DATA:
+    lv_char TYPE char10.
+
+  IF p_date IS INITIAL.
+    p_str = '-'.
+    RETURN.
+  ENDIF.
+
+  WRITE p_date TO lv_char.
+
+  CONDENSE lv_char.
+
+  p_str = lv_char.
 
 ENDFORM.
