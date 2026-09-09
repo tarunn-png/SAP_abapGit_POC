@@ -114,6 +114,16 @@ TYPES: BEGIN OF ty_output,
        END OF ty_output.
 
 *---------------------------------------------------------------------*
+* VENDOR AGGREGATION FOR HISTOGRAM
+*---------------------------------------------------------------------*
+
+TYPES: BEGIN OF ty_vendor,
+         name1         TYPE lfa1-name1,
+         total_overdue TYPE i,
+         item_count    TYPE i,
+       END OF ty_vendor.
+
+*---------------------------------------------------------------------*
 * INTERNAL TABLES
 *---------------------------------------------------------------------*
 
@@ -223,6 +233,17 @@ PARAMETERS:
 SELECTION-SCREEN END OF BLOCK b4.
 
 *---------------------------------------------------------------------*
+* HISTOGRAM DISPLAY
+*---------------------------------------------------------------------*
+
+SELECTION-SCREEN BEGIN OF BLOCK b5 WITH FRAME.
+
+PARAMETERS:
+  p_hist AS CHECKBOX DEFAULT 'X'.
+
+SELECTION-SCREEN END OF BLOCK b5.
+
+*---------------------------------------------------------------------*
 * START OF SELECTION
 *---------------------------------------------------------------------*
 
@@ -235,9 +256,13 @@ START-OF-SELECTION.
     EXIT.
   ENDIF.
 
-  PERFORM build_fieldcatalog.
-  PERFORM build_sort.
-  PERFORM display_alv.
+  IF p_hist = 'X'.
+    PERFORM display_histogram.
+  ELSE.
+    PERFORM build_fieldcatalog.
+    PERFORM build_sort.
+    PERFORM display_alv.
+  ENDIF.
 
 *---------------------------------------------------------------------*
 * GET DATA
@@ -991,6 +1016,301 @@ FORM display_alv.
     MESSAGE 'Error while displaying ALV' TYPE 'I'.
 
   ENDIF.
+
+ENDFORM.
+
+*---------------------------------------------------------------------*
+* HISTOGRAM DISPLAY
+*---------------------------------------------------------------------*
+
+FORM escape_html
+  USING
+    p_text  TYPE string
+  CHANGING
+    p_html  TYPE string.
+
+  p_html = p_text.
+
+  REPLACE ALL OCCURRENCES OF '&'  IN p_html WITH '&amp;'.
+  REPLACE ALL OCCURRENCES OF '<'  IN p_html WITH '&lt;'.
+  REPLACE ALL OCCURRENCES OF '>'  IN p_html WITH '&gt;'.
+  REPLACE ALL OCCURRENCES OF '"'  IN p_html WITH '&quot;'.
+
+ENDFORM.
+
+*---------------------------------------------------------------------*
+* DISPLAY HISTOGRAM
+*---------------------------------------------------------------------*
+
+FORM display_histogram.
+
+  DATA:
+    lt_vendor    TYPE STANDARD TABLE OF ty_vendor,
+    ls_vendor    TYPE ty_vendor,
+    lt_html      TYPE STANDARD TABLE OF string,
+    lv_html      TYPE string,
+    lv_html_line TYPE string,
+    lv_line      TYPE string,
+    lv_name      TYPE lfa1-name1,
+    lv_escaped   TYPE string,
+    lv_max       TYPE i,
+    lv_index     TYPE i,
+    lv_width     TYPE i,
+    lv_vendors   TYPE i,
+    lv_items     TYPE i,
+    lv_rank_c    TYPE c LENGTH 4,
+    lv_days_c    TYPE c LENGTH 10,
+    lv_count_c   TYPE c LENGTH 6,
+    lv_pct_c     TYPE c LENGTH 6,
+    lv_vendors_c TYPE c LENGTH 4,
+    lv_items_c   TYPE c LENGTH 10,
+    lv_date      TYPE c LENGTH 12,
+    lv_title     TYPE c LENGTH 80.
+
+*---------------------------------------------------------------------*
+* AGGREGATE OPEN OVERDUE ITEMS BY VENDOR
+*---------------------------------------------------------------------*
+
+  LOOP AT gt_output INTO gs_output
+       WHERE balance_qty > 0
+         AND eindt IS NOT INITIAL
+         AND eindt < sy-datum.
+
+    CLEAR ls_vendor.
+
+    ls_vendor-name1         = gs_output-name1.
+    ls_vendor-total_overdue = gs_output-overdue_days.
+    ls_vendor-item_count    = 1.
+
+    COLLECT ls_vendor INTO lt_vendor.
+
+    lv_items = lv_items + 1.
+
+  ENDLOOP.
+
+*---------------------------------------------------------------------*
+* SORT DESCENDING AND KEEP TOP 10
+*---------------------------------------------------------------------*
+
+  SORT lt_vendor BY total_overdue DESCENDING.
+
+  DELETE lt_vendor FROM 11.
+
+  IF lt_vendor[] IS INITIAL.
+
+    MESSAGE 'No open overdue PO items found for histogram' TYPE 'I'.
+    EXIT.
+
+  ENDIF.
+
+  READ TABLE lt_vendor INTO ls_vendor INDEX 1.
+  lv_max = ls_vendor-total_overdue.
+  lv_vendors = LINES( lt_vendor ).
+
+  WRITE sy-datum TO lv_date.
+
+*---------------------------------------------------------------------*
+* BUILD HTML DOCUMENT
+*---------------------------------------------------------------------*
+
+  lv_title = 'Top 10 Vendors - Open PO Overdue'.
+
+  lv_html_line = '<!DOCTYPE html>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '<html lang="en">'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '<head>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '  <meta charset="utf-8">'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '  <title>Open PO Overdue - Top 10 Vendors</title>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '  <style>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    body { background:#f4f6f8; font-family: Arial, Helvetica, sans-serif; margin:0; padding:20px; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    .container { max-width:1000px; margin:0 auto; background:#fff; border-radius:16px; box-shadow:0 10px 30px rgba(0,0,0,0.12); padding:30px; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    .header { text-align:center; margin-bottom:28px; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    h1 { margin:0; color:#2c3e50; font-size:26px; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    .meta { color:#7f8c8d; font-size:14px; margin:8px 0 4px; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    .summary { color:#e74c3c; font-size:14px; font-weight:700; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    .count { color:#c0392b; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    .chart { display:flex; flex-direction:column; gap:8px; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    .head-row { display:flex; align-items:center; font-weight:700; color:#555; border-bottom:2px solid #e1e4e8; padding-bottom:8px; margin-bottom:8px; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    .row { display:flex; align-items:center; padding:4px 0; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    .row:hover { background:#f8fafc; border-radius:8px; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    .rank { width:45px; text-align:center; font-weight:bold; color:#7f8c8d; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    .label { width:260px; padding-right:12px; text-align:right; font-size:13px; color:#2c3e50; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    .bar-wrap { flex:1; background:#eef2f6; border-radius:8px; height:30px; overflow:hidden; position:relative; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    .bar { height:100%; background:linear-gradient(90deg, #ff6b6b, #e74c3c); border-radius:8px; box-shadow:0 4px 10px rgba(231,76,60,0.25); }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    .value { width:70px; text-align:right; padding-left:10px; font-weight:bold; font-size:13px; color:#2c3e50; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    .footer { text-align:center; margin-top:24px; color:#95a5a6; font-size:12px; }'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '  </style>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '</head>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '<body>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '<div class="container">'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '  <div class="header">'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    <h1>Top 10 Vendors by Total Overdue Days</h1>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_vendors_c = lv_vendors.
+  lv_items_c   = lv_items.
+  CONDENSE lv_vendors_c.
+  CONDENSE lv_items_c.
+
+  lv_html_line = '    <p class="meta">Open PO items with balance quantity > 0 and delivery date before '.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = lv_date.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '</p>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    <p class="summary">Top '.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = lv_vendors_c.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = ' open overdue vendors | '.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = lv_items_c.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = ' open overdue items</p>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '  </div>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '  <div class="chart">'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '    <div class="head-row"><div class="rank">#</div><div class="label">Vendor</div><div class="bar-wrap">Total Overdue Days</div><div class="value">Days</div></div>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_index = 1.
+
+  LOOP AT lt_vendor INTO ls_vendor.
+
+    lv_name = ls_vendor-name1.
+    CONDENSE lv_name.
+
+    PERFORM escape_html USING lv_name CHANGING lv_escaped.
+
+    IF lv_max > 0.
+      lv_width = ( ls_vendor-total_overdue * 100 ) / lv_max.
+    ELSE.
+      lv_width = 0.
+    ENDIF.
+
+    lv_rank_c  = lv_index.
+    lv_days_c  = ls_vendor-total_overdue.
+    lv_count_c = ls_vendor-item_count.
+    lv_pct_c   = lv_width.
+
+    CONDENSE lv_rank_c.
+    CONDENSE lv_days_c.
+    CONDENSE lv_count_c.
+    CONDENSE lv_pct_c.
+
+    CONCATENATE
+      '    <div class="row" title="Vendor: ' lv_escaped
+      ' | Overdue Days: ' lv_days_c
+      ' | Open Items: ' lv_count_c '">'
+      '<div class="rank">' lv_rank_c '</div>'
+      '<div class="label">' lv_escaped '</div>'
+      '<div class="bar-wrap">'
+      '<div class="bar" style="width:' lv_pct_c '%;"></div>'
+      '</div>'
+      '<div class="value">' lv_days_c '</div>'
+      '</div>'
+    INTO lv_line.
+
+    APPEND lv_line TO lt_html.
+
+    lv_index = lv_index + 1.
+
+  ENDLOOP.
+
+  lv_html_line = '  </div>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '  <div class="footer">Open PO Overdue Dashboard | Report ZMM_OPEN_PO_09</div>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '</div>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '</body>'.
+  APPEND lv_html_line TO lt_html.
+
+  lv_html_line = '</html>'.
+  APPEND lv_html_line TO lt_html.
+
+  CONCATENATE LINES OF lt_html INTO lv_html SEPARATED BY ''.
+
+*---------------------------------------------------------------------*
+* DISPLAY HTML IN BROWSER CONTROL
+*---------------------------------------------------------------------*
+
+  CALL METHOD cl_abap_browser=>show_html
+    EXPORTING
+      html_string = lv_html
+      title       = lv_title
+      size        = cl_abap_browser=>large
+      format      = cl_abap_browser=>landscape.
 
 ENDFORM.
 
