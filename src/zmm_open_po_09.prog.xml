@@ -3,7 +3,7 @@
  <asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0">
   <asx:values>
    <PROGDIR>
-    <NAME>ZMM_PUR_ORDER_REPORT</NAME>
+    <NAME>ZMM_OPEN_PO_09</NAME>
     <SUBC>1</SUBC>
     <RLOAD>E</RLOAD>
     <FIXPT>X</FIXPT>
@@ -12,26 +12,8 @@
    <TPOOL>
     <item>
      <ID>R</ID>
-     <ENTRY>Purchase Order Report Github demo</ENTRY>
-     <LENGTH>33</LENGTH>
-    </item>
-    <item>
-     <ID>I</ID>
-     <KEY>005</KEY>
-     <ENTRY>Output Options</ENTRY>
-     <LENGTH>14</LENGTH>
-    </item>
-    <item>
-     <ID>S</ID>
-     <KEY>P_CHART</KEY>
-     <ENTRY>Show Top 10 Overdue Vendor Chart</ENTRY>
-     <LENGTH>40</LENGTH>
-    </item>
-    <item>
-     <ID>S</ID>
-     <KEY>P_GRID</KEY>
-     <ENTRY>Show Detail List</ENTRY>
-     <LENGTH>24</LENGTH>
+     <ENTRY>Open PO</ENTRY>
+     <LENGTH>7</LENGTH>
     </item>
     <item>
      <ID>S</ID>
