@@ -1051,7 +1051,7 @@ FORM display_histogram.
     lv_html      TYPE string,
     lv_html_line TYPE string,
     lv_line      TYPE string,
-    lv_name      TYPE lfa1-name1,
+    lv_name      TYPE string,
     lv_escaped   TYPE string,
     lv_max       TYPE i,
     lv_index     TYPE i,
@@ -1065,7 +1065,7 @@ FORM display_histogram.
     lv_vendors_c TYPE c LENGTH 4,
     lv_items_c   TYPE c LENGTH 10,
     lv_date      TYPE c LENGTH 12,
-    lv_title     TYPE c LENGTH 80.
+    lv_title     TYPE cl_abap_browser=>title.
 
 *---------------------------------------------------------------------*
 * AGGREGATE OPEN OVERDUE ITEMS BY VENDOR
